@@ -104,11 +104,37 @@ final int _kUnblockedUserActions =
 /// A static class to conduct semantics role checks.
 sealed class _DebugSemanticsRoleChecks {
   static FlutterError? _checkSemanticsData(SemanticsNode node) => switch (node.role) {
+    SemanticsRole.alertDialog => _noCheckRequired,
+    SemanticsRole.dialog => _noCheckRequired,
     SemanticsRole.none => _noCheckRequired,
     SemanticsRole.tab => _semanticsTab,
     SemanticsRole.tabBar => _semanticsTabBar,
     SemanticsRole.tabPanel => _noCheckRequired,
+    SemanticsRole.table => _noCheckRequired,
+    SemanticsRole.cell => _semanticsCell,
+    SemanticsRole.columnHeader => _semanticsColumnHeader,
+    SemanticsRole.radioGroup => _semanticsRadioGroup,
+    // TODO(chunhtai): add checks when the roles are used in framework.
+    // https://github.com/flutter/flutter/issues/159741.
+    SemanticsRole.row => _unimplemented,
+    SemanticsRole.searchBox => _unimplemented,
+    SemanticsRole.dragHandle => _unimplemented,
+    SemanticsRole.spinButton => _unimplemented,
+    SemanticsRole.comboBox => _unimplemented,
+    SemanticsRole.menuBar => _unimplemented,
+    SemanticsRole.menu => _unimplemented,
+    SemanticsRole.menuItem => _unimplemented,
+    SemanticsRole.list => _unimplemented,
+    SemanticsRole.listItem => _unimplemented,
+    SemanticsRole.form => _unimplemented,
+    SemanticsRole.tooltip => _unimplemented,
+    SemanticsRole.loadingSpinner => _unimplemented,
+    SemanticsRole.progressBar => _unimplemented,
+    SemanticsRole.hotKey => _unimplemented,
   }(node);
+
+  static FlutterError? _unimplemented(SemanticsNode node) =>
+      FlutterError('Missing checks for role ${node.getSemanticsData().role}');
 
   static FlutterError? _noCheckRequired(SemanticsNode node) => null;
 
@@ -136,6 +162,53 @@ sealed class _DebugSemanticsRoleChecks {
       }
       return error == null;
     });
+    return error;
+  }
+
+  static FlutterError? _semanticsCell(SemanticsNode node) {
+    if (node.parent?.role != SemanticsRole.table) {
+      return FlutterError('A cell must be a child of a table');
+    }
+    return null;
+  }
+
+  static FlutterError? _semanticsColumnHeader(SemanticsNode node) {
+    if (node.parent?.role != SemanticsRole.table) {
+      return FlutterError('A columnHeader must be a child of a table');
+    }
+    return null;
+  }
+
+  static FlutterError? _semanticsRadioGroup(SemanticsNode node) {
+    FlutterError? error;
+    bool hasCheckedChild = false;
+    bool validateRadioGroupChildren(SemanticsNode node) {
+      final SemanticsData data = node.getSemanticsData();
+      if (!data.hasFlag(SemanticsFlag.hasCheckedState)) {
+        node.visitChildren(validateRadioGroupChildren);
+        return error == null;
+      }
+
+      if (!data.hasFlag(SemanticsFlag.isInMutuallyExclusiveGroup)) {
+        error = FlutterError(
+          'Radio buttons in a radio group must be in a mutually exclusive group',
+        );
+        return false;
+      }
+
+      if (data.hasFlag(SemanticsFlag.isChecked)) {
+        if (hasCheckedChild) {
+          error = FlutterError('Radio groups must not have multiple checked children');
+          return false;
+        }
+        hasCheckedChild = true;
+      }
+
+      assert(error == null);
+      return true;
+    }
+
+    node.visitChildren(validateRadioGroupChildren);
     return error;
   }
 }
@@ -522,6 +595,7 @@ class SemanticsData with Diagnosticable {
     required this.headingLevel,
     required this.linkUrl,
     required this.role,
+    required this.controlsNodes,
     this.tags,
     this.transform,
     this.customSemanticsActionIds,
@@ -782,6 +856,11 @@ class SemanticsData with Diagnosticable {
   /// {@macro flutter.semantics.SemanticsNode.role}
   final SemanticsRole role;
 
+  /// {@macro flutter.semantics.SemanticsNode.controlsNodes}
+  ///
+  /// {@macro flutter.semantics.SemanticsProperties.controlsNodes}
+  final Set<String>? controlsNodes;
+
   /// Whether [flags] contains the given flag.
   bool hasFlag(SemanticsFlag flag) => (flags & flag.index) != 0;
 
@@ -839,6 +918,9 @@ class SemanticsData with Diagnosticable {
     properties.add(DoubleProperty('scrollExtentMax', scrollExtentMax, defaultValue: null));
     properties.add(IntProperty('headingLevel', headingLevel, defaultValue: 0));
     properties.add(DiagnosticsProperty<Uri>('linkUrl', linkUrl, defaultValue: null));
+    if (controlsNodes != null) {
+      properties.add(IterableProperty<String>('controls', controlsNodes, ifEmpty: null));
+    }
   }
 
   @override
@@ -871,7 +953,8 @@ class SemanticsData with Diagnosticable {
         other.headingLevel == headingLevel &&
         other.linkUrl == linkUrl &&
         other.role == role &&
-        _sortedListsEqual(other.customSemanticsActionIds, customSemanticsActionIds);
+        _sortedListsEqual(other.customSemanticsActionIds, customSemanticsActionIds) &&
+        setEquals<String>(controlsNodes, other.controlsNodes);
   }
 
   @override
@@ -905,6 +988,7 @@ class SemanticsData with Diagnosticable {
       linkUrl,
       customSemanticsActionIds == null ? null : Object.hashAll(customSemanticsActionIds!),
       role,
+      controlsNodes == null ? null : Object.hashAll(controlsNodes!),
     ),
   );
 
@@ -1073,6 +1157,7 @@ class SemanticsProperties extends DiagnosticableTree {
     this.onDismiss,
     this.customSemanticsActions,
     this.role,
+    this.controlsNodes,
   }) : assert(
          label == null || attributedLabel == null,
          'Only one of label or attributedLabel should be provided',
@@ -1524,14 +1609,29 @@ class SemanticsProperties extends DiagnosticableTree {
   /// a level 3 is a subsection of that, and so on.
   final int? headingLevel;
 
-  /// Provides hint values which override the default hints on supported
-  /// platforms.
+  /// Overrides the default accessibility hints provided by the platform.
   ///
-  /// On Android, If no hint overrides are used then default [hint] will be
-  /// combined with the [label]. Otherwise, the [hint] will be ignored as long
-  /// as there as at least one non-null hint override.
+  /// This [hintOverrides] property does not affect how the platform processes hints;
+  /// it only sets the custom text that will be read by assistive technology.
   ///
-  /// On iOS, these are always ignored and the default [hint] is used instead.
+  /// On Android, these overrides replace the default hints for semantics nodes
+  /// with tap or long-press actions. For example, if [SemanticsHintOverrides.onTapHint]
+  /// is provided, instead of saying `Double tap to activate`, the screen reader
+  /// will say `Double tap to <onTapHint>`.
+  ///
+  /// On iOS, this property is ignored, and default platform behavior applies.
+  ///
+  /// Example usage:
+  /// ```dart
+  /// const Semantics.fromProperties(
+  ///  properties: SemanticsProperties(
+  ///    hintOverrides: SemanticsHintOverrides(
+  ///      onTapHint: 'open settings',
+  ///    ),
+  ///  ),
+  ///  child: Text('button'),
+  /// )
+  /// ```
   final SemanticsHintOverrides? hintOverrides;
 
   /// The reading direction of the [label], [value], [increasedValue],
@@ -1859,6 +1959,17 @@ class SemanticsProperties extends DiagnosticableTree {
   /// {@endtemplate}
   final SemanticsRole? role;
 
+  /// The [SemanticsNode.identifier]s of widgets controlled by this subtree.
+  ///
+  /// {@template flutter.semantics.SemanticsProperties.controlsNodes}
+  /// If a widget is controlling the visibility or content of another widget,
+  /// for example, [Tab]s control child visibilities of [TabBarView] or
+  /// [ExpansionTile] controls visibility of its expanded content, one must
+  /// assign a [SemanticsNode.identifier] to the content and also provide a set
+  /// of identifiers including the content's identifier to this property.
+  /// {@endtemplate}
+  final Set<String>? controlsNodes;
+
   @override
   void debugFillProperties(DiagnosticPropertiesBuilder properties) {
     super.debugFillProperties(properties);
@@ -2049,6 +2160,10 @@ class SemanticsNode with DiagnosticableTreeMixin {
   /// See also:
   ///
   ///  * [elevation], the actual elevation of this [SemanticsNode].
+  @Deprecated(
+    'This was a cache for internal calculations and is no longer needed. '
+    'This feature was deprecated after v3.29.0-0.0.pre.',
+  )
   double? elevationAdjustment;
 
   /// The index of this node within the parent's list of semantic children.
@@ -2069,7 +2184,7 @@ class SemanticsNode with DiagnosticableTreeMixin {
   /// An invisible node can be safely dropped from the semantic tree without
   /// losing semantic information that is relevant for describing the content
   /// currently shown on screen.
-  bool get isInvisible => !isMergedIntoParent && rect.isEmpty;
+  bool get isInvisible => !isMergedIntoParent && (rect.isEmpty || (transform?.isZero() ?? false));
 
   // MERGING
 
@@ -2077,8 +2192,15 @@ class SemanticsNode with DiagnosticableTreeMixin {
   ///
   /// This value indicates whether this node has any ancestors with
   /// [mergeAllDescendantsIntoThisNode] set to true.
-  bool get isMergedIntoParent => parent != null && _isMergedIntoParent;
+  bool get isMergedIntoParent => _isMergedIntoParent;
   bool _isMergedIntoParent = false;
+  set isMergedIntoParent(bool value) {
+    if (_isMergedIntoParent == value) {
+      return;
+    }
+    _isMergedIntoParent = value;
+    parent?._markDirty();
+  }
 
   /// Whether the user can interact with this node in assistive technologies.
   ///
@@ -2322,12 +2444,11 @@ class SemanticsNode with DiagnosticableTreeMixin {
     assert(child.owner == owner);
     final bool childShouldMergeToParent = isPartOfNodeMerging;
 
-    if (childShouldMergeToParent == child._isMergedIntoParent) {
+    if (childShouldMergeToParent == child.isMergedIntoParent) {
       return;
     }
 
-    child._isMergedIntoParent = childShouldMergeToParent;
-    _markDirty();
+    child.isMergedIntoParent = childShouldMergeToParent;
 
     if (child.mergeAllDescendantsIntoThisNode) {
       // No need to update the descendants since `child` has the merge flag set.
@@ -2355,6 +2476,11 @@ class SemanticsNode with DiagnosticableTreeMixin {
       child.attach(_owner!);
     }
     _redepthChild(child);
+    // In most cases, child should have up to date `isMergedIntoParent` since
+    // it was set during _RenderObjectSemantics.buildSemantics. However, it is
+    // still possible that this child was an extra node introduced in
+    // RenderObject.assembleSemanticsNode. We have to make sure their
+    // `isMergedIntoParent` is updated correctly.
     _updateChildMergeFlagRecursively(child);
   }
 
@@ -2429,6 +2555,22 @@ class SemanticsNode with DiagnosticableTreeMixin {
     }
   }
 
+  /// When asserts are enabled, returns whether node is marked as dirty.
+  ///
+  /// Otherwise, returns null.
+  ///
+  /// This getter is intended for use in framework unit tests. Applications must
+  /// not depend on its value.
+  @visibleForTesting
+  bool? get debugIsDirty {
+    bool? isDirty;
+    assert(() {
+      isDirty = _dirty;
+      return true;
+    }());
+    return isDirty;
+  }
+
   bool _isDifferentFromCurrentSemanticAnnotation(SemanticsConfiguration config) {
     return _attributedLabel != config.attributedLabel ||
         _attributedHint != config.attributedHint ||
@@ -2454,7 +2596,7 @@ class SemanticsNode with DiagnosticableTreeMixin {
         _areUserActionsBlocked != config.isBlockingUserActions ||
         _headingLevel != config._headingLevel ||
         _linkUrl != config._linkUrl ||
-        _linkUrl != config._linkUrl;
+        _role != config.role;
   }
 
   // TAGS, LABELS, ACTIONS
@@ -2596,6 +2738,10 @@ class SemanticsNode with DiagnosticableTreeMixin {
   ///  * [thickness], which describes how much space in z-direction this
   ///    [SemanticsNode] occupies starting at this [elevation].
   ///  * [elevationAdjustment], which has been used to calculate this value.
+  @Deprecated(
+    'This was a feature added for 3D rendering, but the feature was deprecated. '
+    'This feature was deprecated after v3.29.0-0.0.pre.',
+  )
   double get elevation => _elevation;
   double _elevation = _kEmptyConfig.elevation;
 
@@ -2781,6 +2927,14 @@ class SemanticsNode with DiagnosticableTreeMixin {
   SemanticsRole get role => _role;
   SemanticsRole _role = _kEmptyConfig.role;
 
+  /// {@template flutter.semantics.SemanticsNode.controlsNodes}
+  /// The [SemanticsNode.identifier]s of widgets controlled by this node.
+  /// {@endtemplate}
+  ///
+  /// {@macro flutter.semantics.SemanticsProperties.controlsNodes}
+  Set<String>? get controlsNodes => _controlsNodes;
+  Set<String>? _controlsNodes = _kEmptyConfig.controlsNodes;
+
   bool _canPerformAction(SemanticsAction action) => _actions.containsKey(action);
 
   static final SemanticsConfiguration _kEmptyConfig = SemanticsConfiguration();
@@ -2847,6 +3001,7 @@ class SemanticsNode with DiagnosticableTreeMixin {
     _headingLevel = config._headingLevel;
     _linkUrl = config._linkUrl;
     _role = config._role;
+    _controlsNodes = config._controlsNodes;
     _replaceChildren(childrenInInversePaintOrder ?? const <SemanticsNode>[]);
 
     if (mergeAllDescendantsIntoThisNodeValueChanged) {
@@ -2896,6 +3051,7 @@ class SemanticsNode with DiagnosticableTreeMixin {
     double thickness = _thickness;
     Uri? linkUrl = _linkUrl;
     SemanticsRole role = _role;
+    Set<String>? controlsNodes = _controlsNodes;
     final Set<int> customSemanticsActionIds = <int>{};
     for (final CustomSemanticsAction action in _customSemanticsActions.keys) {
       customSemanticsActionIds.add(CustomSemanticsAction.getIdentifier(action));
@@ -2995,6 +3151,12 @@ class SemanticsNode with DiagnosticableTreeMixin {
 
         thickness = math.max(thickness, node._thickness + node._elevation);
 
+        if (controlsNodes == null) {
+          controlsNodes = node._controlsNodes;
+        } else if (node._controlsNodes != null) {
+          controlsNodes = <String>{...controlsNodes!, ...node._controlsNodes!};
+        }
+
         return true;
       });
     }
@@ -3028,6 +3190,7 @@ class SemanticsNode with DiagnosticableTreeMixin {
       headingLevel: headingLevel,
       linkUrl: linkUrl,
       role: role,
+      controlsNodes: controlsNodes,
     );
   }
 
@@ -3113,6 +3276,7 @@ class SemanticsNode with DiagnosticableTreeMixin {
       headingLevel: data.headingLevel,
       linkUrl: data.linkUrl?.toString() ?? '',
       role: data.role,
+      controlsNodes: data.controlsNodes?.toList(),
     );
     _dirty = false;
   }
@@ -3672,15 +3836,7 @@ class _TraversalSortNode implements Comparable<_TraversalSortNode> {
 class SemanticsOwner extends ChangeNotifier {
   /// Creates a [SemanticsOwner] that manages zero or more [SemanticsNode] objects.
   SemanticsOwner({required this.onSemanticsUpdate}) {
-    // TODO(polina-c): stop duplicating code across disposables
-    // https://github.com/flutter/flutter/issues/137435
-    if (kFlutterMemoryAllocationsEnabled) {
-      FlutterMemoryAllocations.instance.dispatchObjectCreated(
-        library: 'package:flutter/semantics.dart',
-        className: '$SemanticsOwner',
-        object: this,
-      );
-    }
+    assert(debugMaybeDispatchCreated('semantics', 'SemanticsOwner', this));
   }
 
   /// The [onSemanticsUpdate] callback is expected to dispatch [SemanticsUpdate]s
@@ -3702,9 +3858,7 @@ class SemanticsOwner extends ChangeNotifier {
 
   @override
   void dispose() {
-    if (kFlutterMemoryAllocationsEnabled) {
-      FlutterMemoryAllocations.instance.dispatchObjectDisposed(object: this);
-    }
+    assert(debugMaybeDispatchDisposed(this));
     _dirtyNodes.clear();
     _nodes.clear();
     _detachedNodes.clear();
@@ -4874,6 +5028,10 @@ class SemanticsConfiguration {
 
   /// The elevation in z-direction at which the owning [RenderObject] is
   /// located relative to its parent.
+  @Deprecated(
+    'This was a feature added for 3D rendering, but the feature was deprecated. '
+    'This feature was deprecated after v3.29.0-0.0.pre.',
+  )
   double get elevation => _elevation;
   double _elevation = 0.0;
   set elevation(double value) {
@@ -5262,6 +5420,15 @@ class SemanticsConfiguration {
     _hasBeenAnnotated = true;
   }
 
+  /// The [SemanticsNode.identifier]s of widgets controlled by this node.
+  Set<String>? get controlsNodes => _controlsNodes;
+  Set<String>? _controlsNodes;
+  set controlsNodes(Set<String>? value) {
+    assert(value != null);
+    _controlsNodes = value;
+    _hasBeenAnnotated = true;
+  }
+
   // TAGS
 
   /// The set of tags that this configuration wants to add to all child
@@ -5426,7 +5593,13 @@ class SemanticsConfiguration {
 
     _thickness = math.max(_thickness, child._thickness + child._elevation);
 
-    _hasBeenAnnotated = _hasBeenAnnotated || child._hasBeenAnnotated;
+    if (_controlsNodes == null) {
+      _controlsNodes = child._controlsNodes;
+    } else if (child._controlsNodes != null) {
+      _controlsNodes = <String>{..._controlsNodes!, ...child._controlsNodes!};
+    }
+
+    _hasBeenAnnotated = hasBeenAnnotated || child.hasBeenAnnotated;
   }
 
   /// Returns an exact copy of this configuration.
@@ -5435,7 +5608,7 @@ class SemanticsConfiguration {
       .._isSemanticBoundary = _isSemanticBoundary
       ..explicitChildNodes = explicitChildNodes
       ..isBlockingSemanticsOfPreviouslyPaintedNodes = isBlockingSemanticsOfPreviouslyPaintedNodes
-      .._hasBeenAnnotated = _hasBeenAnnotated
+      .._hasBeenAnnotated = hasBeenAnnotated
       .._isMergingSemanticsOfDescendants = _isMergingSemanticsOfDescendants
       .._textDirection = _textDirection
       .._sortKey = _sortKey
@@ -5467,7 +5640,8 @@ class SemanticsConfiguration {
       ..isBlockingUserActions = isBlockingUserActions
       .._headingLevel = _headingLevel
       .._linkUrl = _linkUrl
-      .._role = _role;
+      .._role = _role
+      .._controlsNodes = _controlsNodes;
   }
 }
 

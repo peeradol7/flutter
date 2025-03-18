@@ -17,7 +17,6 @@
 #include "impeller/core/host_buffer.h"
 #include "impeller/core/raw_ptr.h"
 #include "impeller/core/texture_descriptor.h"
-#include "impeller/entity/contents/clip_contents.h"
 #include "impeller/entity/contents/conical_gradient_contents.h"
 #include "impeller/entity/contents/content_context.h"
 #include "impeller/entity/contents/contents.h"
@@ -55,10 +54,7 @@
 #include "impeller/renderer/render_target.h"
 #include "impeller/renderer/testing/mocks.h"
 #include "impeller/renderer/vertex_buffer_builder.h"
-#include "impeller/typographer/backends/skia/text_frame_skia.h"
-#include "impeller/typographer/backends/skia/typographer_context_skia.h"
 #include "third_party/imgui/imgui.h"
-#include "third_party/skia/include/core/SkTextBlob.h"
 
 // TODO(zanderso): https://github.com/flutter/flutter/issues/127701
 // NOLINTBEGIN(bugprone-unchecked-optional-access)
@@ -68,6 +64,10 @@ namespace testing {
 
 using EntityTest = EntityPlayground;
 INSTANTIATE_PLAYGROUND_SUITE(EntityTest);
+
+Rect RectMakeCenterSize(Point center, Size size) {
+  return Rect::MakeSize(size).Shift(center - size / 2);
+}
 
 TEST_P(EntityTest, CanCreateEntity) {
   Entity entity;
@@ -2325,11 +2325,14 @@ TEST_P(EntityTest, DrawSuperEllipse) {
 TEST_P(EntityTest, DrawRoundSuperEllipse) {
   auto callback = [&](ContentContext& context, RenderPass& pass) -> bool {
     // UI state.
+    static int style_index = 0;
     static float center[2] = {830, 830};
     static float size[2] = {600, 600};
     static bool horizontal_symmetry = true;
     static bool vertical_symmetry = true;
     static bool corner_symmetry = true;
+
+    const char* style_options[] = {"Fill", "Stroke"};
 
     // Initially radius_tl[0] will be mirrored to all 8 values since all 3
     // symmetries are enabled.
@@ -2366,6 +2369,8 @@ TEST_P(EntityTest, DrawRoundSuperEllipse) {
 
     ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
     {
+      ImGui::Combo("Style", &style_index, style_options,
+                   sizeof(style_options) / sizeof(char*));
       ImGui::SliderFloat2("Center", center, 0, 1000);
       ImGui::SliderFloat2("Size", size, 0, 1000);
       ImGui::Checkbox("Symmetry: Horizontal", &horizontal_symmetry);
@@ -2402,11 +2407,25 @@ TEST_P(EntityTest, DrawRoundSuperEllipse) {
         .bottom_right = {radius_br[0], radius_br[1]},
     };
 
+    auto rse = RoundSuperellipse::MakeRectRadii(
+        RectMakeCenterSize({center[0], center[1]}, {size[0], size[1]}), radii);
+
+    Path path;
+    std::unique_ptr<Geometry> geom;
+    if (style_index == 0) {
+      geom = std::make_unique<RoundSuperellipseGeometry>(
+          RectMakeCenterSize({center[0], center[1]}, {size[0], size[1]}),
+          radii);
+    } else {
+      path = PathBuilder{}
+                 .SetConvexity(Convexity::kConvex)
+                 .AddRoundSuperellipse(rse)
+                 .SetBounds(rse.GetBounds())
+                 .TakePath();
+      geom = Geometry::MakeStrokePath(path, /*stroke_width=*/2);
+    }
+
     auto contents = std::make_shared<SolidColorContents>();
-    std::unique_ptr<RoundSuperellipseGeometry> geom =
-        std::make_unique<RoundSuperellipseGeometry>(
-            Rect::MakeOriginSize({center[0], center[1]}, {size[0], size[1]}),
-            radii);
     contents->SetColor(Color::Red());
     contents->SetGeometry(geom.get());
 
