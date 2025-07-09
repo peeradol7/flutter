@@ -6,7 +6,10 @@ import 'dart:typed_data';
 
 import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
+<<<<<<< HEAD
 import 'package:ui/src/engine.dart';
+=======
+>>>>>>> fcf2c11572af6f390246c056bc905eca609533a0
 import 'package:ui/src/engine/browser_detection.dart';
 import 'package:ui/ui.dart';
 

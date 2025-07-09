@@ -521,4 +521,13 @@ Playground::GLProcAddressResolver Playground::CreateGLProcAddressResolver()
   return impl_->CreateGLProcAddressResolver();
 }
 
+Playground::VKProcAddressResolver Playground::CreateVKProcAddressResolver()
+    const {
+  return impl_->CreateVKProcAddressResolver();
+}
+
+void Playground::SetGPUDisabled(bool value) const {
+  impl_->SetGPUDisabled(value);
+}
+
 }  // namespace impeller

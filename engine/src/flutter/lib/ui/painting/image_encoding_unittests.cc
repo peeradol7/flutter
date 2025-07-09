@@ -44,6 +44,7 @@ class MockDlImage : public DlImage {
   MOCK_METHOD(bool, isTextureBacked, (), (const, override));
   MOCK_METHOD(bool, isUIThreadSafe, (), (const, override));
   MOCK_METHOD(SkISize, dimensions, (), (const, override));
+  MOCK_METHOD(DlISize, GetSize, (), (const, override));
   MOCK_METHOD(size_t, GetApproximateByteSize, (), (const, override));
 };
 
@@ -223,7 +224,7 @@ std::shared_ptr<impeller::Context> MakeConvertDlImageToSkImageContext(
   EXPECT_CALL(*context, GetResourceAllocator).WillRepeatedly(Return(allocator));
   EXPECT_CALL(*context, CreateCommandBuffer).WillOnce(Return(command_buffer));
   EXPECT_CALL(*device_buffer, OnGetContents).WillOnce(Return(buffer.data()));
-  EXPECT_CALL(*command_queue, Submit(_, _))
+  EXPECT_CALL(*command_queue, Submit(_, _, _))
       .WillRepeatedly(
           DoAll(InvokeArgument<1>(impeller::CommandBuffer::Status::kCompleted),
                 Return(fml::Status())));
